@@ -46,6 +46,31 @@ COPY requirements.txt requirements-optional.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then pip install --no-cache-dir -r requirements-optional.txt; fi
 
+# Pre-install llama-cpp-python[server] (CPU-only build) so Cookbook's
+# `llama-server` launch path works out of the box on first use, without a
+# runtime source build. Python 3.14 has no prebuilt wheels on the cpu index,
+# so this compiles llama.cpp from the sdist.
+#
+# CC=gcc/CXX=g++ MUST be set explicitly: without CXX=g++ the sdist's final
+# link of libggml-base.so drops libstdc++, producing an .so with an undefined
+# `__cxxabiv1::__class_type_info` vtable symbol that fails to load at import
+# time. With CXX=g++ the .so correctly links libstdc++.so.6.
+#
+# Parallelism is capped low: the GHA build runner is a 2-core / 7GB instance,
+# and GCC 14 hits an internal compiler error ("Bus error" in stl_vector.h)
+# under -O3 with high -j on the ggml-cpu ops, which previously bricked builds
+# here. CMAKE_BUILD_PARALLEL_LEVEL=2 keeps it within the runner's RAM and
+# dodges the ICE.
+ARG LLAMA_CPP_PYTHON=true
+RUN if [ "$LLAMA_CPP_PYTHON" = "true" ]; then \
+        CC=gcc CXX=g++ \
+        CMAKE_BUILD_PARALLEL_LEVEL=2 \
+        MAKEFLAGS="-j2" \
+        pip install --no-cache-dir \
+            "llama-cpp-python[server]" \
+            --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu ; \
+    fi
+
 # Copy app code
 COPY . .
 

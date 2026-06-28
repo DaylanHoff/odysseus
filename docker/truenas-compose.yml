@@ -67,6 +67,15 @@ services:
       chromadb:
         condition: service_started
     restart: unless-stopped
+    # Explicit resource ceiling: 128 GB RAM and all host CPUs (28 cores on this
+    # TrueNAS box). The host has 188 GB / 28 cores, so this leaves headroom for
+    # other apps while letting Odysseus (and its in-container LLM/model work)
+    # use the bulk of the box. `cpus: "28"` = full CPU; omit a lower cap.
+    deploy:
+      resources:
+        limits:
+          memory: 128G
+          cpus: "28"
 
   chromadb:
     image: docker.io/chromadb/chroma:latest
