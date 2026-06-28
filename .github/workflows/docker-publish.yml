@@ -29,7 +29,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # NOTE: GHCR image refs must be lowercase. github.repository preserves the
+  # owner's original casing (e.g. DaylanHoff/odysseus), which Docker rejects.
+  # Each job lowercases it into IMAGE_NAME via $GITHUB_ENV below.
+  REPO: ${{ github.repository }}
 
 jobs:
   build:
@@ -52,6 +55,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
       - name: Log in to GHCR
@@ -93,6 +98,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
       - name: Read APP_VERSION + short sha
         id: ver
         run: |
@@ -126,6 +133,8 @@ jobs:
             type=raw,value=${{ steps.ver.outputs.version }}-dev.${{ steps.ver.outputs.short }},enable=${{ github.ref == 'refs/heads/dev' }}
       - name: Create manifest list + push tags
         working-directory: /tmp/digests
+        # IMAGE_NAME comes from $GITHUB_ENV (lowercased above) and is in the
+        # shell environment; REGISTRY is a workflow env var.
         run: |
           tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           digests=$(printf "${REGISTRY}/${IMAGE_NAME}@sha256:%s " *)
@@ -134,11 +143,9 @@ jobs:
           docker buildx imagetools create $tags $digests
         env:
           REGISTRY: ${{ env.REGISTRY }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
       - name: Inspect
         run: |
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then ref=latest; else ref=dev; fi
           docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${ref}"
         env:
           REGISTRY: ${{ env.REGISTRY }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
