@@ -1178,6 +1178,33 @@
                 <span class="preset-slider-value" id="tokens-value">No limit</span>
               </div>
               <input type="range" class="preset-range" id="custom-max-tokens" min="256" max="8448" step="256" value="8448">
+              <div class="preset-thinking-wrap" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
+                <div class="preset-slider-row" style="margin-top:0;margin-bottom:8px;">
+                  <label title="Auto = provider default (keeps the built-in safeguard that suppresses thinking during tool calls on Ollama). Off = force-disable. On = force-enable. Effort = enable and use the effort level below.">Reasoning / Thinking</label>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                  <div style="flex:1;min-width:120px;">
+                    <label class="preset-hint-row" style="font-size:11px;opacity:0.6;display:block;margin-bottom:2px;">Mode</label>
+                    <select id="set-thinkingMode" class="settings-select" style="width:100%;">
+                      <option value="auto">Auto (provider default)</option>
+                      <option value="off">Off (disable)</option>
+                      <option value="on">On (force)</option>
+                      <option value="effort">Effort (use level)</option>
+                    </select>
+                  </div>
+                  <div style="flex:1;min-width:120px;" id="set-thinkingEffortRow">
+                    <label class="preset-hint-row" style="font-size:11px;opacity:0.6;display:block;margin-bottom:2px;">Effort</label>
+                    <select id="set-thinkingEffort" class="settings-select" style="width:100%;">
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+                <label class="preset-hint-row" style="font-size:11px;opacity:0.6;display:block;margin-bottom:2px;" title="One rule per line: 'model-substring = mode' or 'model-substring = mode:effort'. Longest matching substring wins. Example: qwen3 = off">Per-model overrides</label>
+                <textarea id="set-thinkingOverrides" rows="3" placeholder="qwen3 = off&#10;gpt-oss:120b = effort:high&#10;deepseek-r1 = on" style="width:100%;font-family:var(--font-mono,monospace);font-size:11px;resize:vertical;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px;box-sizing:border-box;"></textarea>
+                <div id="set-thinkingMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);margin-top:3px;">Longest case-insensitive substring match wins. Modes: auto, off, on, effort. Optional <code>:effort</code>.</div>
+              </div>
             </div>
             <!-- Prompt (character/persona) tab -->
             <div class="preset-chartab" data-chartab-panel="character" style="display:none">
@@ -1589,39 +1616,7 @@
             <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="2 6 12 13 22 6"/></svg>Email Safety<span style="flex:1"></span><label class="admin-switch" title="When on, agent send_email and reply_to_email tools stage a draft for your approval instead of sending immediately."><input type="checkbox" id="set-agentEmailConfirm" checked><span class="admin-slider"></span></label></h2>
             <div class="admin-toggle-sub" style="margin-bottom:8px">When on, agent <code>send_email</code> / <code>reply_to_email</code> tools stage a draft for your approval (in the chat) instead of SMTPing immediately. Stops models from inventing a signature and sending it to a real recipient before you can review.</div>
           </div>
-          <div class="admin-card">
-            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><path d="M9.663 17h4.673M12 3v1m6.364 1.636-.707.707M21 12h-1M4 12H3m3.343-5.657-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.468V19a2 2 0 1 1-4 0v-.532a3.374 3.374 0 0 0-.988-2.387l-.548-.547Z"/></svg>Reasoning / Thinking</h2>
-            <div class="admin-toggle-sub" style="margin-bottom:8px">Control how reasoning models (qwen3, gpt-oss, deepseek-r1, minimax, o1/o3/o4, gpt-5, Claude) spend thinking tokens. Per-model overrides below win over the global mode.</div>
-            <div class="settings-col">
-              <div class="settings-row">
-                <label class="settings-label" title="Auto = provider default (keeps the built-in safeguard that suppresses thinking during tool calls on Ollama). Off = force-disable. On = force-enable. Effort = enable and use the effort level below.">Mode</label>
-                <select id="set-thinkingMode" class="settings-select">
-                  <option value="auto">Auto (provider default)</option>
-                  <option value="off">Off (disable thinking)</option>
-                  <option value="on">On (force thinking)</option>
-                  <option value="effort">Effort (use level below)</option>
-                </select>
-              </div>
-              <div class="settings-row" id="set-thinkingEffortRow">
-                <label class="settings-label" title="Effort level used when Mode = Effort (and as the On-level where supported).">Effort</label>
-                <select id="set-thinkingEffort" class="settings-select">
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </div>
-              <div class="settings-row" style="align-items:flex-start;">
-                <label class="settings-label" style="margin-top:6px;" title="One rule per line: 'model-substring = mode' or 'model-substring = mode:effort'. Longest matching substring wins. Example: qwen3 = off">Per-model overrides</label>
-                <div style="flex:1;">
-                  <textarea id="set-thinkingOverrides" class="settings-select" rows="4" placeholder="qwen3 = off&#10;gpt-oss:120b = effort:high&#10;deepseek-r1 = on" style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;resize:vertical;"></textarea>
-                  <div style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);margin-top:3px;">Longest case-insensitive substring match wins. Modes: auto, off, on, effort. Optional <code>:effort</code> suffix.</div>
-                </div>
-              </div>
-              <div id="set-thinkingMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
-            </div>
-          </div>
         </div>
-
         <!-- ═══ SEARCH TAB ═══ -->
         <div data-settings-panel="search" class="hidden">
           <div class="admin-card">

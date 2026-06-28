@@ -86,7 +86,104 @@ export function init(apiBase) {
   initExpandButton();
   initPersistentChat();
   initImportCard();
+  initThinkingControls();
   loadUserTemplates();
+}
+
+/**
+ * Reasoning / Thinking controls — Mode + Effort + per-model overrides.
+ *
+ * Lives on the Inject tab of the Prompt (persona/inject/group) modal so it's
+ * alongside the other per-request model tuning (temperature / max tokens).
+ * Mirrors the per-user backend knobs in src/llm_core.py's
+ * _apply_thinking_control: global mode + effort + per-model overrides.
+ */
+function initThinkingControls() {
+  const modeSel = document.getElementById('set-thinkingMode');
+  if (!modeSel) return;
+  const effortSel = document.getElementById('set-thinkingEffort');
+  const effortRow = document.getElementById('set-thinkingEffortRow');
+  const overridesTa = document.getElementById('set-thinkingOverrides');
+  const msg = document.getElementById('set-thinkingMsg');
+
+  function syncEffortRow() {
+    if (effortRow) effortRow.style.display = modeSel.value === 'effort' ? '' : 'none';
+  }
+  // Serialize the saved overrides dict (values may be a mode string or
+  // {mode, effort}) into the `key = mode` / `key = mode:effort` textarea
+  // syntax, and back. Empty/invalid lines are dropped silently.
+  function overridesToText(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    return Object.keys(obj).map(k => {
+      const v = obj[k];
+      if (v && typeof v === 'object') {
+        const mode = String(v.mode || '').toLowerCase();
+        const effort = String(v.effort || '').toLowerCase();
+        return k + ' = ' + mode + (effort && mode === 'effort' ? ':' + effort : '');
+      }
+      return k + ' = ' + String(v || '');
+    }).join('\n');
+  }
+  function textToOverrides(text) {
+    const out = {};
+    String(text || '').split(/\r?\n/).forEach(raw => {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) return;
+      const eq = line.indexOf('=');
+      if (eq < 0) return;
+      const key = line.slice(0, eq).trim();
+      const val = line.slice(eq + 1).trim().toLowerCase();
+      if (!key || !val) return;
+      if (val.indexOf(':') >= 0) {
+        const parts = val.split(':');
+        const mode = (parts[0] || '').trim();
+        let effort = (parts[1] || '').trim();
+        if (['auto', 'off', 'on', 'effort'].indexOf(mode) < 0) return;
+        if (effort && ['low', 'medium', 'high'].indexOf(effort) < 0) effort = '';
+        out[key] = effort ? { mode, effort } : mode;
+      } else {
+        if (['auto', 'off', 'on', 'effort'].indexOf(val) < 0) return;
+        out[key] = val;
+      }
+    });
+    return out;
+  }
+
+  (async () => {
+    try {
+      const s = await fetch(`${API_BASE}/api/auth/settings`, { credentials: 'same-origin' }).then(r => r.json());
+      if (s.thinking_mode) modeSel.value = s.thinking_mode;
+      if (s.thinking_effort && effortSel) effortSel.value = s.thinking_effort;
+      if (overridesTa) overridesTa.value = overridesToText(s.thinking_model_overrides);
+      syncEffortRow();
+    } catch (_) {}
+  })();
+
+  let saveTimer = null;
+  async function save() {
+    const payload = {
+      thinking_mode: modeSel.value,
+      thinking_effort: effortSel ? effortSel.value : 'medium',
+    };
+    if (overridesTa) payload.thinking_model_overrides = textToOverrides(overridesTa.value);
+    try {
+      await fetch(`${API_BASE}/api/auth/settings`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (msg) { msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = 'Longest case-insensitive substring match wins. Modes: auto, off, on, effort. Optional :effort.'; }, 1500); }
+    } catch (_) {
+      if (msg) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+    }
+  }
+  function debouncedSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 400);
+  }
+  modeSel.addEventListener('change', () => { syncEffortRow(); save(); });
+  if (effortSel) effortSel.addEventListener('change', save);
+  if (overridesTa) overridesTa.addEventListener('input', debouncedSave);
 }
 
 function initCharTabs() {
