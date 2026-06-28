@@ -306,6 +306,118 @@ def _detect_amd():
         return None
 
 
+def _detect_intel():
+    """Detect Intel GPUs (Arc/iGPU) via DRM sysfs.
+
+    Supports both discrete Arc cards (local VRAM exposed via mem_info_* files)
+    and integrated/unified-memory GPUs where only GTT/shared memory is visible.
+    """
+
+    def _read(path):
+        if _remote_host:
+            val = _run(["cat", path])
+            return val.strip() if val else None
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return f.read().strip()
+        except Exception:
+            return None
+
+    def _list_drm_cards():
+        if _remote_host:
+            out = _run(["ls", "/sys/class/drm"])
+            if not out:
+                return []
+            return [e for e in out.split() if e.startswith("card") and "-" not in e]
+        try:
+            return [e for e in os.listdir("/sys/class/drm") if e.startswith("card") and "-" not in e]
+        except Exception:
+            return []
+
+    def _has_vulkan():
+        if _run(["which", "vulkaninfo"]):
+            return True
+        lib_candidates = (
+            "/usr/lib/libvulkan.so.1",
+            "/usr/lib64/libvulkan.so.1",
+            "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+        )
+        if _remote_host:
+            for p in lib_candidates:
+                if _run(["test", "-e", p]) is not None:
+                    return True
+            return False
+        return any(os.path.exists(p) for p in lib_candidates)
+
+    try:
+        cards = []
+        unified = False
+        ram_gb = _get_ram_gb()
+        for _cidx, entry in enumerate(_list_drm_cards()):
+            base = f"/sys/class/drm/{entry}/device"
+            vendor = _read(f"{base}/vendor")
+            if vendor != "0x8086":
+                continue
+
+            vram_raw = _read(f"{base}/mem_info_vram_total")
+            lmem_raw = _read(f"{base}/mem_info_lmem_total")
+            vis_raw = _read(f"{base}/mem_info_vis_vram_total")
+            gtt_raw = _read(f"{base}/mem_info_gtt_total")
+            vram_val = int(vram_raw) if vram_raw and vram_raw.isdigit() else 0
+            lmem_val = int(lmem_raw) if lmem_raw and lmem_raw.isdigit() else 0
+            vis_val = int(vis_raw) if vis_raw and vis_raw.isdigit() else 0
+            gtt_val = int(gtt_raw) if gtt_raw and gtt_raw.isdigit() else 0
+
+            dedicated = max(vram_val, lmem_val, vis_val)
+            if dedicated > 0:
+                vram_bytes = dedicated
+                is_unified = False
+            else:
+                is_unified = True
+                # iGPU fallback: estimate usable shared memory conservatively.
+                # If GTT is visible, cap it to a realistic slice of system RAM.
+                if gtt_val > 0 and ram_gb > 0:
+                    cap = int(ram_gb * (1024**3) * 0.80)
+                    vram_bytes = min(gtt_val, cap) if cap > 0 else gtt_val
+                elif gtt_val > 0:
+                    vram_bytes = gtt_val
+                elif ram_gb > 0:
+                    vram_bytes = int(ram_gb * (1024**3) * 0.50)
+                else:
+                    vram_bytes = 0
+
+            if vram_bytes <= 0:
+                continue
+
+            name = (
+                _read(f"{base}/product_name")
+                or _read(f"{base}/name")
+                or f"Intel GPU ({entry})"
+            )
+            cards.append({"index": _cidx, "name": name, "vram_gb": vram_bytes / (1024**3)})
+            unified = unified or is_unified
+
+        if not cards:
+            return None
+
+        total_vram = sum(c["vram_gb"] for c in cards)
+        groups = _group_gpus(cards)
+        return {
+            "gpu_name": cards[0]["name"],
+            "gpu_vram_gb": round(total_vram, 1),
+            "gpu_count": len(cards),
+            "gpus": cards,
+            "gpu_groups": groups,
+            "homogeneous": len(groups) <= 1,
+            # Intel local inference in Odysseus currently routes through
+            # Vulkan-capable llama.cpp builds when Vulkan is available.
+            "backend": "vulkan" if _has_vulkan() else "cpu_x86",
+            "unified_memory": unified,
+        }
+    except Exception:
+        return None
+
+
 def _detect_apple_silicon():
     """Detect Apple Silicon (M-series) GPUs.
 
@@ -827,7 +939,7 @@ def detect_system(host="", ssh_port="", platform="", fresh=False):
     cpu_name = _get_cpu_name()
     cpu_arch = _get_cpu_arch()
 
-    gpu_info = _detect_apple_silicon() or _detect_nvidia() or _detect_amd()
+    gpu_info = _detect_apple_silicon() or _detect_nvidia() or _detect_amd() or _detect_intel()
 
     if gpu_info:
         result = {

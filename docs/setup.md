@@ -99,10 +99,10 @@ Odysseus SSH key and add the public key to the remote server's
 ssh-copy-id -i data/ssh/id_ed25519.pub user@server
 ```
 
-**Docker GPU overlays.** CPU-only users can skip this section. Cookbook can
-only detect GPUs that Docker exposes to the container — if the host runtime or
-device passthrough is not configured, Cookbook sees the iGPU, another card, or
-CPU instead of your intended GPU.
+**Container GPU overlays (Docker/Podman).** CPU-only users can skip this
+section. Cookbook can only detect GPUs that the container runtime exposes to
+the container — if host runtime/device passthrough is not configured, Cookbook
+sees CPU only (or the wrong GPU) instead of your intended accelerator.
 
 For NVIDIA, `scripts/check-docker-gpu.sh` diagnoses GPU passthrough and can
 optionally install the host runtime or update `.env`.
@@ -153,7 +153,28 @@ COMPOSE_FILE=docker-compose.yml:docker/gpu.amd.yml
 RENDER_GID=989
 ```
 
-For NVIDIA/AMD GPU support, also read the comments in the selected overlay file: docker/gpu.nvidia.yml or docker/gpu.amd.yml.
+**Intel Arc / Xe (Vulkan).** Add this overlay and your render group id:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker/gpu.intel.yml
+RENDER_GID=989
+```
+
+Then rebuild so the image-layer Vulkan userspace is present in-container:
+
+```bash
+docker compose up -d --build
+```
+
+For rootless Podman, also point Odysseus at your user socket:
+
+```bash
+DOCKER_SOCK_PATH=/run/user/1000/podman/podman.sock
+```
+
+For NVIDIA/AMD/Intel GPU support, also read the comments in the selected
+overlay file (`docker/gpu.nvidia.yml`, `docker/gpu.amd.yml`, or
+`docker/gpu.intel.yml`).
 
 **Stack-management UIs (Portainer, Coolify, Dockhand, etc.).** These tools
 often accept only a single Compose file and do not reliably honor `COMPOSE_FILE`
@@ -174,6 +195,8 @@ Verify after enabling either overlay:
 ```bash
 docker compose exec odysseus nvidia-smi -L   # NVIDIA
 docker compose exec odysseus sh -lc 'test -e /dev/kfd && test -d /dev/dri && ls -l /dev/kfd /dev/dri/renderD*'  # AMD
+docker compose exec odysseus sh -lc 'test -d /dev/dri && ls -l /dev/dri/renderD*'  # Intel/Arc/Xe
+docker compose exec odysseus sh -lc 'ldconfig -p | grep libvulkan'  # Vulkan userspace in-container
 ```
 
 > **GPU passthrough ≠ llama.cpp CUDA.** `nvidia-smi` passing inside the

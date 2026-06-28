@@ -5,6 +5,8 @@ FROM python:3.14-slim
 # downloads, and serves from Docker installs.
 # git/cmake are required when Cookbook builds llama.cpp on first llama.cpp
 # launch inside Docker.
+# libvulkan + mesa-vulkan-drivers let llama.cpp and hwfit use Vulkan GPUs
+# (Intel Arc/Xe and Vulkan-capable AMD paths) inside the container.
 # nodejs/npm provide npx for the optional built-in Browser MCP server.
 # gosu lets the entrypoint drop privileges cleanly so signals still reach
 # uvicorn directly (no extra shell layer like `su`/`sudo` would add).
@@ -13,10 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     curl \
     git \
+    glslc \
+    libvulkan-dev \
+    libvulkan1 \
+    mesa-vulkan-drivers \
     nodejs \
     npm \
     tmux \
     openssh-client \
+    vulkan-tools \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
@@ -49,8 +56,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy app code
 COPY . .
 
-# Create data directory (mount a volume here for persistence)
-RUN mkdir -p data logs services/cache/search
+# Create data/cache directories (mount a volume here for persistence)
+RUN mkdir -p data logs services/cache/search /app/.cache/odysseus \
+    && chmod 777 /app/.cache
 
 # Entrypoint that drops to PUID/PGID (default 1000:1000) and repairs
 # ownership on the bind-mounted /app/data and /app/logs. Without this,

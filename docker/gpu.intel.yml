@@ -1,0 +1,24 @@
+# Intel Arc / Xe GPU overlay. Enable by setting COMPOSE_FILE in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker/gpu.intel.yml
+#   RENDER_GID=<numeric output of: getent group render | cut -d: -f3>
+#
+# Works for Docker and Podman with /dev/dri passthrough.
+# Requires host graphics drivers and an Odysseus image build that includes
+# Vulkan userspace (run `docker compose up -d --build` after enabling this
+# overlay so `libvulkan`/Mesa userspace is present in-container).
+#
+# Podman (rootless) note:
+# - keep your user in the host `video` / `render` groups.
+# - some setups also need `--group-add keep-groups` when launching with plain
+#   `podman run` so supplementary host groups are preserved in-container.
+#
+# This overlay only exposes DRM devices to the container.
+# GPU serving still requires a GPU-enabled runtime build (llama.cpp Vulkan, etc.)
+# installed via Cookbook -> Dependencies (or manually).
+services:
+  odysseus:
+    devices:
+      - /dev/dri
+    group_add:
+      - video
+      - ${RENDER_GID:-render}

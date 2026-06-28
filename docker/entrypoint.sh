@@ -96,9 +96,15 @@ repair_bind_mount_ownership() {
 # Repair image-owned writable paths without walking into bind-mounted host
 # trees, then repair the app-owned mount roots separately.
 repair_app_tree_ownership
-for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.local; do
+mkdir -p /app/.cache/odysseus
+for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.cache/odysseus /app/.local; do
     repair_bind_mount_ownership "$dir"
 done
+
+# Some runtimes/volume setups recreate /app/.cache after image build and can
+# reset mode/ownership defaults. Re-assert cache permissions after mounts.
+chown "$PUID:$PGID" /app/.cache/odysseus 2>/dev/null || true
+chmod 777 /app/.cache 2>/dev/null || true
 
 # Cookbook installs vllm/etc. via `pip install --user`, which pulls
 # nvidia-cuda-* wheels into /app/.local but does not set CUDA_HOME or

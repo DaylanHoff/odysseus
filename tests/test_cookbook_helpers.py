@@ -687,6 +687,20 @@ def test_llama_cpp_linux_bootstrap_uses_single_shell_continuations():
 
     assert not any(line.endswith("\\\\") for line in runner_lines)
 
+def test_llama_cpp_linux_bootstrap_prebuilt_handles_tar_gz_and_zip():
+    runner_lines = []
+    _append_llama_cpp_linux_accel_build_lines(runner_lines)
+    script = "\n".join(runner_lines)
+
+    assert '_odysseus_archive="llama-cpp-prebuilt.tar.gz"' in script
+    assert 'case "$_odysseus_prebuilt_url" in' in script
+    assert '*.tar.gz|*.tgz) _odysseus_archive="llama-cpp-prebuilt.tar.gz" ;;' in script
+    assert '*.zip) _odysseus_archive="llama-cpp-prebuilt.zip" ;;' in script
+    assert 'grep -Eq "\\.tar\\.gz$|\\.tgz$"' in script
+    assert 'tar -xzf "$_odysseus_archive" -C build' in script
+    assert 'unzip -qq -o "$_odysseus_archive" -d build' in script
+    assert 'readlink -f "$_odysseus_extracted"' in script
+
 
 def test_llama_cpp_linux_bootstrap_keeps_cpu_fallback_when_no_gpu_toolchain():
     runner_lines = []
@@ -694,7 +708,7 @@ def test_llama_cpp_linux_bootstrap_keeps_cpu_fallback_when_no_gpu_toolchain():
     script = "\n".join(runner_lines)
 
     assert 'WARNING: no HIP/CUDA/Vulkan toolchain found — building llama-server for CPU only.' in script
-    assert 'Install Vulkan (libvulkan-dev) / ROCm for AMD GPUs or CUDA tooling for NVIDIA' in script
+    assert 'Install Vulkan (libvulkan-dev + glslc) / ROCm for AMD GPUs or CUDA tooling for NVIDIA' in script
 
 
 def test_llama_cpp_rebuild_cmd_clears_cached_build_paths():
