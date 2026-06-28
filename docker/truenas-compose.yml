@@ -7,10 +7,12 @@
 #
 # Auto-deploy: the `watchtower` sidecar polls GHCR every 5 minutes and, when a
 # new `:latest` digest appears, pulls it and recreates ONLY the `odysseus`
-# container (scoped via `--label-enable` + the label on the odysseus service).
-# Companion services (chromadb/searxng/ntfy) are intentionally NOT auto-updated
-# — searxng is pinned, and the others rarely change and shouldn't roll without
-# intent. This keeps a bad upstream `:latest` from taking down the whole stack.
+# container (scoped via WATCHTOWER_SCOPE=odysseus + the matching scope label on
+# the odysseus service). Companion services (chromadb/searxng/ntfy) are
+# intentionally NOT auto-updated — searxng is pinned, and the others rarely
+# change and shouldn't roll without intent. This keeps a bad upstream `:latest`
+# from taking down the whole stack. The named scope also isolates this
+# watchtower from any other watchtower instance on the host.
 #
 # Private image: TrueNAS must be authenticated to GHCR. Run once on the host:
 #   echo "$PAT" | docker login ghcr.io -u DaylanHoff --password-stdin
@@ -21,17 +23,23 @@
 # container recreates and is easy to back up. The .env file (also under that
 # dir) holds secrets/config — copy from .env.example and fill in.
 #
+# Companion services (chromadb/searxng/ntfy) are internal-only: they expose
+# ports on the compose network rather than binding host ports, since Odysseus
+# reaches them over the compose network (e.g. http://searxng:8080) and host
+# ports like 8080 are commonly taken by other apps (gluetun, etc.).
+#
 # Bring up manually (for debugging) with:
-#   cd /mnt/PrimarySSDs/odysseus && docker compose -f docker/truenas-compose.yml up -d
+#   cd /mnt/PrimarySSDs/odysseus && docker compose up -d
 # Normally this is managed by the TrueNAS Custom App named "odysseus".
 
 services:
   odysseus:
     image: ghcr.io/daylanhoff/odysseus:latest
-    # Auto-update scope flag: watchtower only touches containers with this label
-    # when started with --label-enable (see the watchtower service below).
+    # Auto-update scope: this watchtower uses WATCHTOWER_SCOPE=odysseus (see the
+    # watchtower service below) and only updates containers carrying the matching
+    # scope label. This isolates it from the dashboard app's watchtower.
     labels:
-      - com.centurylinklabs.watchtower.enable=true
+      - com.centurylinklabs.watchtower.scope=odysseus
     ports:
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-7000}:7000"
     volumes:
@@ -62,8 +70,9 @@ services:
 
   chromadb:
     image: docker.io/chromadb/chroma:latest
-    ports:
-      - "${CHROMADB_BIND:-127.0.0.1}:8100:8000"
+    # Internal-only — odysseus reaches it as chromadb:8000 over the compose network.
+    expose:
+      - "8000"
     volumes:
       - chromadb-data:/chroma/chroma
     environment:
@@ -89,8 +98,10 @@ services:
           sed "s|__SEARXNG_SECRET__|$$secret|g" /tmp/searxng-settings.yml.template > /etc/searxng/settings.yml
         fi
         exec /usr/local/searxng/entrypoint.sh
-    ports:
-      - "127.0.0.1:8080:8080"
+    # Internal-only — odysseus reaches it as searxng:8080 over the compose network.
+    # (Host port 8080 is commonly taken by other apps like gluetun on this host.)
+    expose:
+      - "8080"
     volumes:
       - searxng-data:/etc/searxng
       - ${SEARXNG_SETTINGS_TEMPLATE:-/mnt/PrimarySSDs/odysseus/config/searxng/settings.yml}:/tmp/searxng-settings.yml.template:ro,z
@@ -115,8 +126,9 @@ services:
   ntfy:
     image: docker.io/binwiederhier/ntfy
     command: serve
-    ports:
-      - "${NTFY_BIND:-127.0.0.1}:8091:80"
+    # Internal-only — odysseus reaches it at ntfy:80.
+    expose:
+      - "80"
     volumes:
       - ntfy-cache:/var/cache/ntfy
     environment:
@@ -124,12 +136,15 @@ services:
     restart: unless-stopped
 
   watchtower:
-    # Auto-update sidecar. Scoped with --label-enable so it ONLY updates
-    # containers labeled com.centurylinklabs.watchtower.enable=true (i.e. just
-    # the odysseus service above). Companions are left untouched.
+    # Scoped auto-update sidecar. WATCHTOWER_SCOPE=odysseus means it ONLY updates
+    # containers labeled com.centurylinklabs.watchtower.scope=odysseus (the odysseus
+    # service above). This keeps it isolated from any other watchtower instance on
+    # the host (e.g. the dashboard app's watchtower, which uses a positional
+    # container-name filter). Companions (chromadb/searxng/ntfy) are never touched.
     image: containrrr/watchtower
-    command: --label-enable --cleanup
+    command: --cleanup
     environment:
+      - WATCHTOWER_SCOPE=odysseus
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_CLEANUP=true
     volumes:
