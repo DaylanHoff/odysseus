@@ -56,6 +56,15 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # `__cxxabiv1::__class_type_info` vtable symbol that fails to load at import
 # time. With CXX=g++ the .so correctly links libstdc++.so.6.
 #
+# GGML_NATIVE=OFF on amd64 is REQUIRED: with the default GGML_NATIVE=ON cmake
+# probes the GHA build runner's CPU and enables every extension it finds.
+# The github-hosted amd64 runner has AVX-512-VNNI, so the build emits `vpdpbusd`
+# instructions. The deployment target (TrueNAS i7-14700) has AVX2 + AVX-VNNI
+# but NO AVX-512, so those instructions trap as "Illegal instruction" at
+# runtime and the model fails to load. Pinning to AVX2/FMA/F16C/AVX-VNNI
+# (and leaving every GGML_AVX512_* off) produces a binary tuned to the target
+# without using instructions it cannot execute. arm64 keeps native detection.
+#
 # Parallelism is capped low: the GHA build runner is a 2-core / 7GB instance,
 # and GCC 14 hits an internal compiler error ("Bus error" in stl_vector.h)
 # under -O3 with high -j on the ggml-cpu ops, which previously bricked builds
@@ -63,7 +72,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # dodges the ICE.
 ARG LLAMA_CPP_PYTHON=true
 RUN if [ "$LLAMA_CPP_PYTHON" = "true" ]; then \
+        if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+            EXTRA_CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX_VNNI=ON -DGGML_SSE42=ON -DGGML_AVX512=OFF -DGGML_AVX512_VNNI=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX512_VBMI=OFF"; \
+        else \
+            EXTRA_CMAKE_ARGS=""; \
+        fi ; \
         CC=gcc CXX=g++ \
+        CMAKE_ARGS="$EXTRA_CMAKE_ARGS" \
         CMAKE_BUILD_PARALLEL_LEVEL=2 \
         MAKEFLAGS="-j2" \
         pip install --no-cache-dir \
