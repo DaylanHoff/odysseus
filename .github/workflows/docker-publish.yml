@@ -15,6 +15,10 @@ on:
       - '**.md'
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+    # Manual trigger to (re)publish the image for the current branch without a
+    # code change. Useful for bootstrapping a fork's first GHCR image, or
+    # re-pushing after a registry/package visibility change.
 
 concurrency:
   group: docker-publish-${{ github.ref }}

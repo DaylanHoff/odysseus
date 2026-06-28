@@ -1,0 +1,142 @@
+# TrueNAS deployment compose for Odysseus.
+#
+# This is a CPU-only, prebuilt-image variant of docker-compose.yml, intended to
+# run as a TrueNAS "Custom App" (which cannot `build:` — it must pull a tagged
+# image). It pulls ghcr.io/daylanhoff/odysseus:latest, which is published by
+# .github/workflows/docker-publish.yml on every push to `main`.
+#
+# Auto-deploy: the `watchtower` sidecar polls GHCR every 5 minutes and, when a
+# new `:latest` digest appears, pulls it and recreates ONLY the `odysseus`
+# container (scoped via `--label-enable` + the label on the odysseus service).
+# Companion services (chromadb/searxng/ntfy) are intentionally NOT auto-updated
+# — searxng is pinned, and the others rarely change and shouldn't roll without
+# intent. This keeps a bad upstream `:latest` from taking down the whole stack.
+#
+# Private image: TrueNAS must be authenticated to GHCR. Run once on the host:
+#   echo "$PAT" | docker login ghcr.io -u DaylanHoff --password-stdin
+# (PAT needs `read:packages` scope.) This writes /root/.docker/config.json,
+# which both `docker compose` and watchtower use for pulls.
+#
+# All persistent data lives under /mnt/PrimarySSDs/odysseus/ so it survives
+# container recreates and is easy to back up. The .env file (also under that
+# dir) holds secrets/config — copy from .env.example and fill in.
+#
+# Bring up manually (for debugging) with:
+#   cd /mnt/PrimarySSDs/odysseus && docker compose -f docker/truenas-compose.yml up -d
+# Normally this is managed by the TrueNAS Custom App named "odysseus".
+
+services:
+  odysseus:
+    image: ghcr.io/daylanhoff/odysseus:latest
+    # Auto-update scope flag: watchtower only touches containers with this label
+    # when started with --label-enable (see the watchtower service below).
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-7000}:7000"
+    volumes:
+      - ${APP_DATA_DIR:-/mnt/PrimarySSDs/odysseus/data}:/app/data:z
+      - ${APP_LOGS_DIR:-/mnt/PrimarySSDs/odysseus/logs}:/app/logs:z
+      # Cookbook remote-server SSH identity.
+      - ${APP_DATA_DIR:-/mnt/PrimarySSDs/odysseus/data}/ssh:/app/.ssh:z
+      # Cookbook local model cache (HuggingFace).
+      - ${APP_DATA_DIR:-/mnt/PrimarySSDs/odysseus/data}/huggingface:/app/.cache/huggingface:z
+      # Cookbook-installed Python CLIs/packages persist across recreates.
+      - ${APP_DATA_DIR:-/mnt/PrimarySSDs/odysseus/data}/local:/app/.local:z
+      # Container-engine socket — lets Cookbook reach the host daemon (docker
+      # exec on sibling containers, e.g. ollama). group_add below grants the
+      # in-container user access; DOCKER_GID must match the host's docker group.
+      - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-963}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ${ENV_FILE:-/mnt/PrimarySSDs/odysseus/.env}
+    depends_on:
+      searxng:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    restart: unless-stopped
+
+  chromadb:
+    image: docker.io/chromadb/chroma:latest
+    ports:
+      - "${CHROMADB_BIND:-127.0.0.1}:8100:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
+  searxng:
+    # Pinned, not :latest — odysseus waits on searxng's healthcheck
+    # (depends_on: condition: service_healthy), so a broken upstream `latest`
+    # tag blocks the whole app from starting. Bump deliberately after verifying
+    # a newer tag boots clean.
+    image: docker.io/searxng/searxng:2026.5.31-7159b8aed
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ ! -s /etc/searxng/settings.yml ] || grep -q 'odysseus-local-searxng-json-2026-05-30\|__SEARXNG_SECRET__' /etc/searxng/settings.yml; then
+          secret="$${SEARXNG_SECRET:-}"
+          if [ -z "$$secret" ]; then
+            secret="$$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          fi
+          sed "s|__SEARXNG_SECRET__|$$secret|g" /tmp/searxng-settings.yml.template > /etc/searxng/settings.yml
+        fi
+        exec /usr/local/searxng/entrypoint.sh
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - searxng-data:/etc/searxng
+      - ${SEARXNG_SETTINGS_TEMPLATE:-/mnt/PrimarySSDs/odysseus/config/searxng/settings.yml}:/tmp/searxng-settings.yml.template:ro,z
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/', timeout=5).read(1)\""]
+      interval: 5s
+      timeout: 6s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  ntfy:
+    image: docker.io/binwiederhier/ntfy
+    command: serve
+    ports:
+      - "${NTFY_BIND:-127.0.0.1}:8091:80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+    environment:
+      - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8091}
+    restart: unless-stopped
+
+  watchtower:
+    # Auto-update sidecar. Scoped with --label-enable so it ONLY updates
+    # containers labeled com.centurylinklabs.watchtower.enable=true (i.e. just
+    # the odysseus service above). Companions are left untouched.
+    image: containrrr/watchtower
+    command: --label-enable --cleanup
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_CLEANUP=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  searxng-data:
+  chromadb-data:
+  ntfy-cache:
