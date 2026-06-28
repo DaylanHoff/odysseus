@@ -73,6 +73,7 @@ class PresetInfo:
     max_tokens: Optional[int]
     system_prompt: Optional[str]
     character_name: Optional[str]
+    avatar: str = ""
 
 
 @dataclass
@@ -331,7 +332,7 @@ def try_fallback_endpoint(sess, session_id: str) -> dict | None:
 
 def extract_preset(chat_handler, preset_id) -> PresetInfo:
     """Extract preset parameters via chat_handler."""
-    temperature, max_tokens, system_prompt, char_name = (
+    temperature, max_tokens, system_prompt, char_name, avatar = (
         chat_handler.validate_and_extract_preset(preset_id)
     )
     return PresetInfo(
@@ -339,6 +340,7 @@ def extract_preset(chat_handler, preset_id) -> PresetInfo:
         max_tokens=max_tokens,
         system_prompt=system_prompt,
         character_name=char_name,
+        avatar=avatar or "",
     )
 
 
@@ -944,6 +946,7 @@ def save_assistant_response(
     do_research: bool = False,
     tool_events: list = None,
     incognito: bool = False,
+    avatar: str = None,
 ):
     """Add assistant response to session history. In incognito mode, keeps in-memory context but skips DB persistence."""
     md = dict(last_metrics) if last_metrics else {}
@@ -962,6 +965,8 @@ def save_assistant_response(
         md["model"] = actual_model
     if character_name:
         md["character_name"] = character_name
+    if avatar:
+        md["avatar"] = avatar
     if web_sources:
         md["web_sources"] = web_sources
     if rag_sources:

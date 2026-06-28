@@ -2037,6 +2037,7 @@ async def stream_agent_loop(
                 tools=None,
                 timeout=int(get_setting("agent_stream_timeout_seconds", 300) or 300),
                 session_id=session_id,
+                owner=owner,
             ):
                 if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                     try:
@@ -2591,6 +2592,7 @@ async def stream_agent_loop(
             tools=all_tool_schemas if all_tool_schemas else None,
             timeout=agent_stream_timeout,
             session_id=session_id,
+            owner=owner,
         ):
             if not _round_first_event_logged:
                 _round_first_event_logged = True
@@ -2819,6 +2821,7 @@ async def stream_agent_loop(
                     _raw = await llm_call_async(
                         url=endpoint_url, model=model, messages=_synth_messages,
                         headers=headers, temperature=0.3, max_tokens=max_tokens, timeout=60,
+                        owner=owner,
                     )
                     _synth = _THINK_RE.sub("", strip_tool_blocks(_raw or "")).strip()
                 except Exception as _e:

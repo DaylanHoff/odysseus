@@ -431,8 +431,13 @@ def setup_chat_routes(
             max_tokens=ctx.preset.max_tokens,
             prompt_type=preset_id,
             session_id=session,
+            owner=owner,
         )
         _clean_reply, _clean_md = clean_thinking_for_save(reply, {"model": sess.model})
+        if ctx.preset.character_name:
+            _clean_md["character_name"] = ctx.preset.character_name
+        if ctx.preset.avatar:
+            _clean_md["avatar"] = ctx.preset.avatar
         sess.add_message(ChatMessage("assistant", _clean_reply, metadata=_clean_md))
 
         from core.database import update_session_last_accessed
@@ -1072,6 +1077,8 @@ def setup_chat_routes(
                 _model_info["suffix"] = _model_suffix
             if ctx.preset.character_name:
                 _model_info["character_name"] = ctx.preset.character_name
+            if ctx.preset.avatar:
+                _model_info["avatar"] = ctx.preset.avatar
             yield f'data: {json.dumps(_model_info)}\n\n'
 
             if _is_image_generation_session(sess, owner=_user):
@@ -1134,6 +1141,7 @@ def setup_chat_routes(
                         prompt_type=preset_id,
                         tools=None,
                         session_id=session,
+                        owner=_user,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -1214,6 +1222,7 @@ def setup_chat_routes(
                                     used_memories=ctx.used_memories,
                                     do_research=effective_do_research,
                                     incognito=incognito,
+                                    avatar=ctx.preset.avatar,
                                 )
                                 if _saved_id:
                                     yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
@@ -1349,6 +1358,7 @@ def setup_chat_routes(
                                     rag_sources=ctx.rag_sources,
                                     used_memories=ctx.used_memories,
                                     incognito=incognito,
+                                    avatar=ctx.preset.avatar,
                                 )
                                 if _saved_id:
                                     yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
@@ -1556,6 +1566,7 @@ def setup_chat_routes(
                     messages,
                     headers=sess.headers,
                     temperature=0.7,
+                    owner=_user,
                     # 0 = let the server decide (no cap). A hardcoded 4096 made
                     # local reasoning models (Qwen3 / R1) burn the whole budget
                     # inside <think> and emit no rewrite — the bubble just hung

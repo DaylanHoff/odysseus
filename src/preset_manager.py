@@ -140,6 +140,8 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
         enabled: bool = True,
         inject_prefix: str = "",
         inject_suffix: str = "",
+        avatar: str = "",
+        first_mes: str = "",
     ) -> bool:
         """Update the custom preset"""
         self.presets["custom"] = {
@@ -151,6 +153,11 @@ Use precise language. Show causal relationships explicitly. Quantify uncertainty
             "inject_prefix": inject_prefix,
             "inject_suffix": inject_suffix,
             "enabled": enabled,
+            # Persona avatar (from a character-card import or manual URL).
+            # Carried through PresetInfo → message metadata so the chat
+            # renderer can show it next to the persona's replies.
+            "avatar": avatar or "",
+            "first_mes": first_mes or "",
         }
         return self.save(self.presets)
     

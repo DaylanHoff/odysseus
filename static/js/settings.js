@@ -1721,6 +1721,94 @@ async function initAgentSettings() {
     (curR != null ? ' · ' + curR + ' steps/message' : '') +
     (supInput && supInput.checked ? ' · supervisor on' : '');
 
+  // Reasoning / Thinking controls (separate card on the AI Defaults tab).
+  // Mirrors the per-user backend knobs in src/llm_core.py's
+  // _thinking_mode_for_model: global mode + effort + per-model overrides.
+  var thinkModeSel = el('set-thinkingMode');
+  var thinkEffortSel = el('set-thinkingEffort');
+  var thinkEffortRow = el('set-thinkingEffortRow');
+  var thinkOverridesTa = el('set-thinkingOverrides');
+  var thinkMsg = el('set-thinkingMsg');
+  if (thinkModeSel) {
+    function _syncEffortRow() {
+      if (thinkEffortRow) thinkEffortRow.style.display = thinkModeSel.value === 'effort' ? '' : 'none';
+    }
+    // Serialize the saved overrides dict (values may be a mode string or
+    // {mode, effort}) into the `key = mode` / `key = mode:effort` textarea
+    // syntax, and back. Empty/invalid lines are dropped silently.
+    function _overridesToText(obj) {
+      if (!obj || typeof obj !== 'object') return '';
+      var lines = [];
+      Object.keys(obj).forEach(function(k) {
+        var v = obj[k];
+        if (v && typeof v === 'object') {
+          var mode = String(v.mode || '').toLowerCase();
+          var effort = String(v.effort || '').toLowerCase();
+          lines.push(k + ' = ' + mode + (effort && mode === 'effort' ? ':' + effort : ''));
+        } else {
+          lines.push(k + ' = ' + String(v || ''));
+        }
+      });
+      return lines.join('\n');
+    }
+    function _textToOverrides(text) {
+      var out = {};
+      String(text || '').split(/\r?\n/).forEach(function(raw) {
+        var line = raw.trim();
+        if (!line || line.startsWith('#')) return;
+        var eq = line.indexOf('=');
+        if (eq < 0) return;
+        var key = line.slice(0, eq).trim();
+        var val = line.slice(eq + 1).trim().toLowerCase();
+        if (!key || !val) return;
+        if (val.indexOf(':') >= 0) {
+          var parts = val.split(':');
+          var mode = (parts[0] || '').trim();
+          var effort = (parts[1] || '').trim();
+          if (['auto', 'off', 'on', 'effort'].indexOf(mode) < 0) return;
+          if (effort && ['low', 'medium', 'high'].indexOf(effort) < 0) effort = '';
+          out[key] = effort ? { mode: mode, effort: effort } : mode;
+        } else {
+          if (['auto', 'off', 'on', 'effort'].indexOf(val) < 0) return;
+          out[key] = val;
+        }
+      });
+      return out;
+    }
+    try {
+      var s = await fetch('/api/auth/settings', { credentials: 'same-origin' }).then(r => r.json());
+      if (s.thinking_mode) thinkModeSel.value = s.thinking_mode;
+      if (s.thinking_effort) thinkEffortSel.value = s.thinking_effort;
+      if (thinkOverridesTa) thinkOverridesTa.value = _overridesToText(s.thinking_model_overrides);
+      _syncEffortRow();
+    } catch (_) {}
+    var _thinkSaveTimer = null;
+    async function _saveThinking() {
+      var payload = {
+        thinking_mode: thinkModeSel.value,
+        thinking_effort: thinkEffortSel ? thinkEffortSel.value : 'medium',
+      };
+      if (thinkOverridesTa) payload.thinking_model_overrides = _textToOverrides(thinkOverridesTa.value);
+      try {
+        await fetch('/api/auth/settings', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (thinkMsg) { thinkMsg.textContent = 'Saved'; thinkMsg.style.color = 'var(--fg)'; setTimeout(() => { thinkMsg.textContent = ''; }, 1500); }
+      } catch (_) {
+        if (thinkMsg) { thinkMsg.textContent = 'Failed to save'; thinkMsg.style.color = 'var(--red)'; }
+      }
+    }
+    function _debouncedSave() {
+      clearTimeout(_thinkSaveTimer);
+      _thinkSaveTimer = setTimeout(_saveThinking, 400);
+    }
+    thinkModeSel.addEventListener('change', function() { _syncEffortRow(); _saveThinking(); });
+    if (thinkEffortSel) thinkEffortSel.addEventListener('change', _saveThinking);
+    if (thinkOverridesTa) thinkOverridesTa.addEventListener('input', _debouncedSave);
+  }
+
   // Standalone Email Safety toggle (separate card on the AI Defaults tab).
   // Default to ON if the setting isn't present so a fresh install is safe.
   var emailConfirm = el('set-agentEmailConfirm');

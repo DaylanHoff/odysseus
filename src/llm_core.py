@@ -919,6 +919,141 @@ def _supports_thinking(model: str) -> bool:
     m = model.lower()
     return any(p in m for p in _THINKING_MODEL_PATTERNS)
 
+
+# ── Reasoning / thinking controls ──
+#
+# User-tunable thinking controls (Settings → AI → Reasoning). Resolved per
+# request from src.settings (per-user when an owner is threaded through) and
+# mapped to each provider's native knob:
+#
+#   thinking_mode: "auto" | "off" | "on" | "effort"
+#     auto  = provider default (preserves prior behavior, including the
+#             historical Ollama /v1 forced-suppression safeguard)
+#     off   = force-disable thinking
+#     on    = force-enable thinking
+#     effort= enable + use thinking_effort (low/medium/high)
+#
+#   thinking_model_overrides: {"qwen3": "off", "gpt-oss:120b": "effort", ...}
+#     Most-specific (longest) case-insensitive substring match against the
+#     model id wins. Value may be a mode string or {"mode":...,"effort":...}.
+
+# OpenAI-compat cloud models that accept `reasoning_effort`. Conservative —
+# only the canonical reasoning families, so a non-reasoning model never gets a
+# field its API rejects (api.openai.com 400s on unknown reasoning_effort).
+_REASONING_EFFORT_PATTERNS = (
+    "o1", "o3", "o4", "gpt-5", "deepseek-r1", "deepseek-reasoner",
+    "qwq", "qwen3", "minimax", "gpt-oss",
+)
+
+
+def _supports_reasoning_effort(model: str) -> bool:
+    """True for cloud OpenAI-compatible models that accept reasoning_effort."""
+    if not model:
+        return False
+    m = model.lower()
+    return any(p in m for p in _REASONING_EFFORT_PATTERNS)
+
+
+# Anthropic extended-thinking budget mapped from effort. Must stay below
+# max_tokens (Anthropic requires budget_tokens < max_tokens).
+_ANTHROPIC_EFFORT_BUDGET = {"low": 4000, "medium": 10000, "high": 16000}
+
+
+def _thinking_mode_for_model(model: str, owner: Optional[str]) -> Tuple[str, str]:
+    """Resolve the effective (mode, effort) for a model, applying per-model
+    overrides on top of the global/per-user setting."""
+    from src.settings import get_user_setting
+    mode = str(get_user_setting("thinking_mode", owner or "", "auto") or "auto").lower()
+    effort = str(get_user_setting("thinking_effort", owner or "", "medium") or "medium").lower()
+    overrides = get_user_setting("thinking_model_overrides", owner or "", {}) or {}
+    if isinstance(overrides, dict) and model:
+        m_lc = model.lower()
+        best_key: Optional[str] = None
+        for key in overrides:
+            ks = str(key).lower()
+            if ks and ks in m_lc:
+                if best_key is None or len(ks) > len(best_key):
+                    best_key = ks
+        if best_key is not None:
+            val = overrides[best_key]
+            if isinstance(val, str):
+                mode = val.lower()
+            elif isinstance(val, dict):
+                if val.get("mode"):
+                    mode = str(val["mode"]).lower()
+                if val.get("effort"):
+                    effort = str(val["effort"]).lower()
+    if mode not in ("auto", "off", "on", "effort"):
+        mode = "auto"
+    if effort not in ("low", "medium", "high"):
+        effort = "medium"
+    return mode, effort
+
+
+def _apply_thinking_control(
+    payload: Dict, url: str, model: str, provider: str, owner: Optional[str]
+) -> None:
+    """Apply user-configured thinking/reasoning controls to an outgoing LLM
+    payload, in place. No-op in 'auto' mode except where prior behavior already
+    forced a setting (Ollama /v1 suppression), which is preserved exactly."""
+    # Codex / Copilot use bespoke payload builders with their own reasoning
+    # handling — don't inject foreign fields.
+    if provider in ("chatgpt-subscription", "copilot"):
+        return
+    mode, effort = _thinking_mode_for_model(model, owner)
+
+    # ── Ollama native /api/chat: top-level boolean `think` ──
+    if provider == "ollama" and _is_ollama_native_url(url):
+        if mode == "off":
+            payload["think"] = False
+        elif mode == "on":
+            payload["think"] = True
+        elif mode == "effort":
+            # Native Ollama `think` is boolean-only for most models; gpt-oss
+            # accepts low/medium/high but can't be fully disabled — boolean True
+            # is the safe universal enable.
+            payload["think"] = True
+        # auto: omit (provider default)
+        return
+
+    # ── Ollama OpenAI-compatible /v1 ──
+    if provider == "openai" and _is_ollama_openai_compat_url(url):
+        if mode == "off":
+            payload["think"] = False
+        elif mode == "on":
+            payload["think"] = True
+        elif mode == "effort":
+            payload["reasoning_effort"] = effort
+        else:  # auto — preserve original forced suppression, but ONLY for
+            # thinking-capable models. Setting think:false on a non-thinking
+            # model is a no-op at best and rejected by some Ollama builds, so
+            # the historical guard was (and stays) _supports_thinking-gated.
+            if _supports_thinking(model):
+                payload["think"] = False
+        return
+
+    # ── Anthropic native: opt-in `thinking` budget block ──
+    if provider == "anthropic":
+        if mode in ("on", "effort"):
+            budget = _ANTHROPIC_EFFORT_BUDGET.get(effort, 10000)
+            max_tok = int(payload.get("max_tokens") or 0)
+            # Anthropic requires budget_tokens < max_tokens.
+            if max_tok > 0 and budget >= max_tok:
+                budget = max(1024, max_tok - 1024)
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        # off / auto = omit (Anthropic thinking is opt-in)
+        return
+
+    # ── Cloud OpenAI-compatible: reasoning_effort (gated to reasoning models) ──
+    if _supports_reasoning_effort(model):
+        if mode == "on":
+            payload["reasoning_effort"] = "high"
+        elif mode == "effort":
+            payload["reasoning_effort"] = effort
+        # off / auto: omit — cloud reasoning can't be safely force-disabled
+        # via this field (some providers reject "none"), so the local Ollama
+        # path is the supported way to fully turn thinking off.
+
 def _convert_openai_content_to_anthropic(content):
     """Convert OpenAI multimodal content blocks to Anthropic format.
 
@@ -1379,8 +1514,9 @@ def normalize_model_id(
     return None
 
 def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
-             max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None, 
-             timeout: int = LLMConfig.DEFAULT_TIMEOUT, prompt_type: Optional[str] = None) -> str:
+             max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
+             timeout: int = LLMConfig.DEFAULT_TIMEOUT, prompt_type: Optional[str] = None,
+             owner: Optional[str] = None) -> str:
     """Synchronous LLM call with optional prompt type enhancement."""
     h = _provider_headers(_detect_provider(url))
     # Tolerate headers that arrive as a JSON string (some sessions stored them
@@ -1441,6 +1577,11 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
+    # Apply user-configured thinking/reasoning controls (sync path). Covers
+    # all providers — Ollama native `think`, Anthropic `thinking` budget,
+    # OpenAI-compat `reasoning_effort`. No-op in 'auto' except for the
+    # preserved Ollama /v1 forced-suppression safeguard.
+    _apply_thinking_control(payload, url, model, provider, owner)
     try:
         note_model_activity(target_url, model)
         r = httpx_post_kimi_aware(target_url, h, json=payload, timeout=timeout)
@@ -1495,6 +1636,9 @@ def llm_call_with_fallback(candidates, messages, **kwargs) -> str:
     without an exception wins. Connection / 5xx-style failures fall through to
     the next candidate. The dead-host cooldown inside `llm_call` makes repeat
     attempts at an offline primary effectively free.
+
+    Pass `owner=` through kwargs so per-user thinking controls apply on each
+    candidate.
     """
     cands = _dedupe_candidates(candidates)
     if not cands:
@@ -1539,6 +1683,7 @@ async def llm_call_async(
     max_retries: int = LLMConfig.MAX_RETRIES,
     prompt_type: Optional[str] = None,
     session_id: Optional[str] = None,
+    owner: Optional[str] = None,
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
@@ -1635,10 +1780,12 @@ async def llm_call_async(
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
-        # Suppress thinking for qwen3/gemma4 on Ollama /v1 — same as stream_llm.
-        if _is_ollama_openai_compat_url(url) and _supports_thinking(model):
-            payload["think"] = False
         _apply_local_cache_affinity(payload, url, session_id)
+    # Apply user-configured thinking/reasoning controls. Covers all providers
+    # — Ollama native `think`, Anthropic `thinking` budget, OpenAI-compat
+    # `reasoning_effort`. No-op in 'auto' except for the preserved Ollama /v1
+    # forced-suppression safeguard.
+    _apply_thinking_control(payload, url, model, provider, owner)
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
@@ -1696,7 +1843,8 @@ async def llm_call_async(
 async def stream_llm(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
                      max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                      timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
-                     tools: Optional[List[Dict]] = None, session_id: Optional[str] = None):
+                     tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
+                     owner: Optional[str] = None):
     """Stream LLM responses with improved error handling.
 
     Yields SSE chunks:
@@ -1756,16 +1904,16 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             payload[tok_key] = max_tokens
         if tools:
             payload["tools"] = tools
-        # For Ollama's OpenAI-compat /v1 endpoint with thinking models (qwen3,
-        # gemma4, etc.), suppress thinking so tool calls aren't swallowed inside
-        # <think> blocks. Ollama /v1 accepts "think": false as a top-level param.
-        if _is_ollama_openai_compat_url(url) and _supports_thinking(model):
-            payload["think"] = False
         _apply_local_cache_affinity(payload, url, session_id)
         h = _provider_headers(provider, headers)
         if provider == "copilot":
             from src.copilot import apply_request_headers
             apply_request_headers(h, messages_copy)
+    # Apply user-configured thinking/reasoning controls. Covers all providers
+    # — Ollama native `think`, Anthropic `thinking` budget, OpenAI-compat
+    # `reasoning_effort`. No-op in 'auto' except for the preserved Ollama /v1
+    # forced-suppression safeguard for thinking models (qwen3/gemma4/...).
+    _apply_thinking_control(payload, url, model, provider, owner)
 
     # Connect budget from LLMConfig.CONNECT_TIMEOUT (env LLM_CONNECT_TIMEOUT).
     # The dead-host cooldown still bounds a genuinely unreachable upstream, so a

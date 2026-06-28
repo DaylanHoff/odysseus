@@ -179,6 +179,23 @@ DEFAULT_SETTINGS = {
         "Newsletters, marketing, automated digests, and FYI-only updates are "
         "NOT urgent."
     ),
+    # Reasoning / thinking controls. Applied per provider in src/llm_core.py
+    # via `_resolve_thinking_control`:
+    #   - thinking_mode: "auto" (provider default) | "off" (force-disable) |
+    #                    "on" (force-enable) | "effort" (use thinking_effort).
+    #     "auto" preserves prior behavior — including the original tool-call
+    #     safeguard (thinking stays off while tools are enabled).
+    #   - thinking_effort: "low" | "medium" | "high" — provider-mapped:
+    #       Ollama native think    -> true (effort ignored, boolean only)
+    #       Ollama /v1            -> reasoning_effort (high/medium/low/none)
+    #       OpenAI-compatible     -> reasoning_effort (gated to reasoning models)
+    #       Anthropic            -> thinking.budget_tokens (4000/10000/16000)
+    #   - thinking_model_overrides: {"qwen3": "off", "gpt-oss:120b": "effort"}
+    #     keyed by substring matched (case-insensitive) against the model id.
+    #     Most-specific match wins. Empty = use the global mode/effort.
+    "thinking_mode": "auto",
+    "thinking_effort": "medium",
+    "thinking_model_overrides": {},
     # Keyboard shortcuts (action: key combination)
     "keybinds": {
         "search": "ctrl+k",
@@ -266,6 +283,9 @@ _PER_USER_KEYS = {
     "default_endpoint_id", "default_model", "default_model_fallbacks",
     "utility_endpoint_id", "utility_model", "utility_model_fallbacks",
     "research_endpoint_id", "research_model",
+    # Reasoning/thinking controls — per-user so different operators can run
+    # a hot local qwen3/gpt-oss with thinking off while another leaves it on.
+    "thinking_mode", "thinking_effort", "thinking_model_overrides",
 }
 
 

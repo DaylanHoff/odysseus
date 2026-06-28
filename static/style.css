@@ -38275,3 +38275,85 @@ body.theme-frosted .modal {
 .log-line-default {
   color: var(--fg, #9cdef2);
 }
+
+/* ── Persona avatars ─────────────────────────────────────────────── */
+/* Clickable avatar shown next to a persona's assistant messages, the
+   character-indicator chip in the chat input bar, and the preview row in
+   the Persona modal. Each is a small circular <img>; clicking the in-chat
+   avatar or the chip opens the .persona-avatar-lightbox full-size overlay. */
+
+/* Avatar prepended to .role in an assistant bubble. The .role row is
+   flex with a ::before dot; hide the dot when an avatar is present so we
+   don't double-up indicators. */
+.role-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  background: var(--panel);
+  transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+.role-avatar:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--red)) 35%, transparent);
+}
+.role:has(.role-avatar)::before { display: none; }
+
+/* Full-size expand overlay for a persona avatar. Reuses .attach-lightbox
+   for the backdrop/close behavior; this just makes sure the image keeps a
+   sensible max size and rounded corners. */
+.persona-avatar-lightbox img {
+  max-width: min(92vw, 720px);
+  max-height: min(88vh, 720px);
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+/* Avatar thumbnail swapped into the character-indicator chip in the chat
+   input bar (replaces the generic user-icon SVG when a persona with an
+   avatar is active). Sized to match the 16px toolbar icons. */
+.char-indicator-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  background: var(--panel);
+  transition: transform 0.12s ease-out;
+}
+.char-indicator-avatar:hover { transform: scale(1.1); }
+
+/* Avatar preview row in the Persona modal — shown after importing a
+   Character Card or selecting a template that carries an avatar. */
+.char-avatar-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.char-avatar-preview img {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.char-avatar-preview-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

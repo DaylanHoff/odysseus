@@ -85,6 +85,7 @@ export function init(apiBase) {
   initSaveAsTemplate();
   initExpandButton();
   initPersistentChat();
+  initImportCard();
   loadUserTemplates();
 }
 
@@ -97,6 +98,91 @@ function initCharTabs() {
         p.style.display = p.dataset.chartabPanel === target ? '' : 'none';
       });
     });
+  });
+}
+
+// Active persona avatar (URL) for the currently-loaded template, or ''.
+// Read by saveCustomPreset so the custom preset carries the avatar through
+// to the chat path. Cleared when switching to a template without one.
+let _activeAvatar = '';
+let _activeFirstMes = '';
+
+/**
+ * Show/hide the avatar preview row in the Persona modal.
+ */
+function _syncAvatarPreview() {
+  const wrap = document.getElementById('char-avatar-preview');
+  const img = document.getElementById('char-avatar-preview-img');
+  const nameEl = document.getElementById('char-avatar-preview-name');
+  if (!wrap || !img) return;
+  if (_activeAvatar) {
+    img.src = _activeAvatar;
+    img.onerror = () => { img.style.display = 'none'; };
+    img.onload = () => { img.style.display = ''; };
+    if (nameEl) nameEl.textContent = '';
+    wrap.style.display = 'flex';
+  } else {
+    wrap.style.display = 'none';
+    img.removeAttribute('src');
+  }
+}
+
+/**
+ * Import a Character Card (V2) from a .png or .json file.
+ */
+function initImportCard() {
+  const btn = document.getElementById('char-import-card-btn');
+  const input = document.getElementById('char-import-file-input');
+  if (!btn || !input) return;
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const origText = btn.innerHTML;
+    btn.innerHTML = '⏳ Importing...';
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`${API_BASE}/api/presets/import-card`, {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        const msg = (data && (data.detail || data.message)) || `Import failed (HTTP ${res.status})`;
+        if (window.styledAlert) window.styledAlert('Import failed', msg);
+        else alert(msg);
+        return;
+      }
+      const tpl = data.template || {};
+      await loadUserTemplates();
+      // Select the freshly-imported template so its fields populate.
+      const select = document.getElementById('char-template-select');
+      if (select) {
+        select.value = tpl.name || '';
+        if (select.value !== (tpl.name || '')) select.value = '__default__';
+        select.dispatchEvent(new Event('change'));
+      }
+      // Populate name + system prompt directly (the imported card's values
+      // may differ from the saved template defaults — they're authoritative).
+      const nameInput = document.getElementById('custom-character-name');
+      const promptInput = document.getElementById('custom-system-prompt');
+      if (nameInput) nameInput.value = tpl.name || '';
+      if (promptInput) promptInput.value = tpl.system_prompt || '';
+      _activeAvatar = tpl.avatar || '';
+      _activeFirstMes = tpl.first_mes || '';
+      _syncAvatarPreview();
+      if (window.showToast) window.showToast('Character card imported');
+    } catch (e) {
+      console.error('Import card failed:', e);
+      if (window.styledAlert) window.styledAlert('Import failed', String(e));
+      else alert('Import failed: ' + e);
+    } finally {
+      btn.innerHTML = origText;
+      btn.disabled = false;
+      input.value = '';  // allow re-importing the same file
+    }
   });
 }
 
@@ -216,6 +302,9 @@ function initNameDropdown() {
       if (tempInput) { tempInput.value = 1.0; if (tempValue) tempValue.textContent = '1.0'; tempInput.dispatchEvent(new Event('input')); }
       if (tokensInput) { tokensInput.value = 8448; if (tokensValue) tokensValue.textContent = 'No limit'; tokensInput.dispatchEvent(new Event('input')); }
       if (delBtn) delBtn.style.display = 'none';
+      _activeAvatar = '';
+      _activeFirstMes = '';
+      _syncAvatarPreview();
       return;
     }
     // Load the selected template
@@ -308,6 +397,11 @@ function _tryLoadTemplate(name) {
   }
   const delBtn = document.getElementById('char-delete-template-btn');
   if (delBtn) delBtn.style.display = '';
+  // Track avatar from the loaded template so saveCustomPreset can carry it
+  // onto the custom preset (and the modal preview reflects it).
+  _activeAvatar = tmpl.avatar || '';
+  _activeFirstMes = tmpl.first_mes || '';
+  _syncAvatarPreview();
 }
 
 function _populateCharSelect() {
@@ -598,6 +692,10 @@ export function openCustomPresetModal() {
     if (tkv) tkv.textContent = (saved === 0 || saved > 8192) ? 'No limit' : parseInt(saved).toLocaleString();
   }
   if (promptInput) promptInput.value = savedConfig.system_prompt || '';
+  // Reflect the active persona's avatar in the modal preview.
+  _activeAvatar = savedConfig.avatar || '';
+  _activeFirstMes = savedConfig.first_mes || '';
+  _syncAvatarPreview();
 
   // Load inject fields
   const prefixInput = document.getElementById('inject-prefix');
@@ -788,6 +886,11 @@ export async function saveCustomPreset(showToast, showError) {
     system_prompt: system_prompt,
     inject_prefix: _prefixInput ? _prefixInput.value : '',
     inject_suffix: _suffixInput ? _suffixInput.value : '',
+    // Persona avatar + optional first-message (greeting). Carried through from
+    // an imported character card or manually-set avatar. Empty for Inject-tab
+    // starts, which are not personas.
+    avatar: _isInjectStart ? '' : (window._activeAvatar || ''),
+    first_mes: _isInjectStart ? '' : (window._activeFirstMes || ''),
   };
 
   try {
@@ -837,6 +940,7 @@ export async function saveCustomPreset(showToast, showError) {
           body: JSON.stringify({
             id: (userTemplates.find(t => t.name === saveName) || {}).id || '',
             name: saveName, system_prompt, temperature: config.temperature, max_tokens: config.max_tokens,
+            avatar: config.avatar || '', first_mes: config.first_mes || '',
           }),
         }).then(r => { if (r.ok) loadUserTemplates(); }).catch(() => {});
       }
@@ -971,6 +1075,33 @@ function _syncCharIndicator() {
   const _hasTuning = (!isNaN(_t) && _t !== 1.0) || (!!custom?.max_tokens && custom.max_tokens !== 0);
   const _hasInject = !!(custom?.inject_prefix || custom?.inject_suffix);
   const injectActive = enabled && !custom?.character_name && (_hasTuning || _hasInject);
+  // Persona avatar: when a character with an avatar image is active, swap the
+  // chip's generic user-icon SVG for the actual avatar thumbnail (clickable to
+  // expand). Falls back to the SVG icon when there's no avatar.
+  const avatarSrc = (hasChar && custom?.avatar) ? String(custom.avatar) : '';
+  let avatarImg = btn.querySelector('img.char-indicator-avatar');
+  if (avatarSrc) {
+    if (!avatarImg) {
+      avatarImg = document.createElement('img');
+      avatarImg.className = 'char-indicator-avatar';
+      avatarImg.referrerPolicy = 'no-referrer';
+      avatarImg.addEventListener('click', (e) => {
+        e.stopPropagation();
+        import('./chatRenderer.js').then(m => {
+          const fn = (m && m.openAvatarLightbox) || (m?.default && m.default.openAvatarLightbox);
+          if (fn) fn(avatarSrc, custom?.character_name || 'Persona avatar');
+        }).catch(() => {});
+      });
+      btn.insertBefore(avatarImg, btn.firstChild);
+    }
+    avatarImg.src = avatarSrc;
+    avatarImg.alt = (custom?.character_name || 'Persona') + ' avatar';
+    avatarImg.style.display = '';
+    if (iconEl) iconEl.style.display = 'none';
+  } else {
+    if (avatarImg) avatarImg.style.display = 'none';
+    if (iconEl) iconEl.style.display = '';
+  }
   // Icon path sets for the indicator chip.
   const _AVATAR = '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>';
   const _SYRINGE = '<path d="m18 2 4 4"/><path d="m17 7 3-3"/><path d="M19 9 8.7 19.3c-1 1-2.5 1-3.4 0l-.6-.6c-1-1-1-2.5 0-3.4L15 5"/><path d="m9 11 4 4"/><path d="m5 19-3 3"/><path d="m14 4 6 6"/>';
@@ -1054,6 +1185,8 @@ export function onSessionSwitch(sessionId) {
         system_prompt: tmpl.system_prompt || tmpl.prompt || '',
         temperature: tmpl.temperature ?? 1.0,
         max_tokens: tmpl.max_tokens || 0,
+        avatar: tmpl.avatar || '',
+        first_mes: tmpl.first_mes || '',
         enabled: true,
       };
       selectedPreset = 'custom';

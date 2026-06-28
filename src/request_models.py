@@ -90,6 +90,19 @@ class PresetUpdateRequest(BaseModel):
         max_length=5000,
         description="Text to append to each outgoing user message"
     )
+    # Persona avatar URL (from a character-card import or manual entry).
+    # Optional; when set and the persona is active, the chat renderer shows
+    # it next to the persona's replies.
+    avatar: str = Field(
+        "",
+        max_length=2000,
+        description="Persona avatar URL (optional, shown next to replies)"
+    )
+    first_mes: str = Field(
+        "",
+        max_length=10000,
+        description="Optional first-message greeting text for the persona"
+    )
 
 
 class DirectoryRequest(BaseModel):

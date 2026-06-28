@@ -278,6 +278,74 @@ function _openImageLightbox(att) {
   document.body.appendChild(overlay);
 }
 
+// Persona avatar lightbox — expand a persona's avatar image to full size.
+// Used by the clickable avatar next to a persona's assistant messages and by
+// the character-indicator chip in the chat input bar.
+let _avatarLightboxEsc = null;
+function _openAvatarLightbox(src, altText) {
+  const safe = safeDisplayImageSrc(src);
+  if (!safe) return;
+  const existing = document.getElementById('persona-avatar-lightbox');
+  if (existing) existing.remove();
+  if (_avatarLightboxEsc) { document.removeEventListener('keydown', _avatarLightboxEsc); _avatarLightboxEsc = null; }
+  const overlay = document.createElement('div');
+  overlay.id = 'persona-avatar-lightbox';
+  overlay.className = 'attach-lightbox persona-avatar-lightbox';
+  const img = document.createElement('img');
+  img.alt = altText || 'Persona avatar';
+  img.src = safe;
+  overlay.appendChild(img);
+  const _onKey = (e) => { if (e.key === 'Escape') _close(); };
+  const _close = () => {
+    document.removeEventListener('keydown', _onKey);
+    _avatarLightboxEsc = null;
+    overlay.remove();
+  };
+  _avatarLightboxEsc = _onKey;
+  overlay.addEventListener('click', _close);
+  document.addEventListener('keydown', _onKey);
+  document.body.appendChild(overlay);
+}
+
+// Prepend a clickable persona avatar <img> to a .role element when the
+// message carries a persona avatar (metadata.avatar, or the live streaming
+// holder's _personaAvatar). Returns true when an avatar was rendered.
+function _renderRoleAvatar(roleEl, metadata, holder) {
+  if (!roleEl) return false;
+  const existing = roleEl.querySelector('.role-avatar');
+  let src = '';
+  if (metadata && typeof metadata === 'object') {
+    src = String(metadata.avatar || '').trim();
+  }
+  if (!src && holder && holder._personaAvatar) {
+    src = String(holder._personaAvatar).trim();
+  }
+  const safe = safeDisplayImageSrc(src);
+  if (!safe) {
+    if (existing) existing.remove();
+    return false;
+  }
+  const name = (metadata && metadata.character_name) || (holder && holder._characterName) || '';
+  if (existing) {
+    const img = existing.querySelector('img');
+    if (img) img.src = safe;
+    return true;
+  }
+  const img = document.createElement('img');
+  img.className = 'role-avatar';
+  img.alt = name ? `${name} avatar` : 'Persona avatar';
+  img.src = safe;
+  img.title = name ? `${name} — click to expand` : 'Click to expand';
+  img.referrerPolicy = 'no-referrer';
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _openAvatarLightbox(safe, name);
+  });
+  img.addEventListener('error', () => { try { img.remove(); } catch {} });
+  roleEl.insertBefore(img, roleEl.firstChild);
+  return true;
+}
+
 // Vision/OCR editor modal — opened from the corner "Aa" button on a chat photo
 // thumbnail. Lets the user view and correct the text the vision model fed to
 // the LLM (e.g. when OCR misreads a word). Persists to the server's vision
@@ -2276,6 +2344,13 @@ export function addMessage(role, content, modelName, metadata) {
       }
     }
 
+    // Prepend a clickable persona avatar when this assistant message has one
+    // (from a character-card import / manually-set avatar). Only for assistant
+    // bubbles — user bubbles never get a persona avatar.
+    if (role === 'assistant') {
+      _renderRoleAvatar(r, metadata, null);
+    }
+
     wrap.appendChild(r);
     wrap.appendChild(b);
 
@@ -2461,6 +2536,8 @@ const chatRenderer = {
   copyMessageText,
   safeToolScreenshotSrc,
   safeDisplayImageSrc,
+  renderRoleAvatar: _renderRoleAvatar,
+  openAvatarLightbox: _openAvatarLightbox,
   buildSourcesBox,
   buildFindingsBox,
   appendReportButton,

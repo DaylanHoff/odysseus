@@ -922,6 +922,17 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       holder._actualModel = modelName;
       _applyModelColor(holder.querySelector('.role'), modelName);
       holder.style.position = 'relative';
+      // Seed the persona avatar on the streaming bubble so it's visible
+      // immediately, before the model_info SSE event arrives.
+      if (presetsModule.getAllPresets) {
+        var _custPreset = presetsModule.getAllPresets().custom || {};
+        if (_custPreset.avatar) {
+          holder._personaAvatar = _custPreset.avatar;
+          if (chatRenderer.renderRoleAvatar) {
+            chatRenderer.renderRoleAvatar(holder.querySelector('.role'), { character_name: _charNameInit, avatar: _custPreset.avatar }, holder);
+          }
+        }
+      }
       
       // Create spinner
       spinner = spinnerModule.create('Initializing', 'right', 'wave');
@@ -1849,6 +1860,17 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                     // Prepend character name if sent by server or set locally
                     var _charName = json.character_name || (presetsModule.getCharacterName ? presetsModule.getCharacterName() : '');
                     if (_charName) holder._characterName = _charName;
+                    // Persona avatar from the active preset — stamped on the
+                    // live streaming bubble so it shows before the message
+                    // is finalized + saved.
+                    if (json.avatar) holder._personaAvatar = json.avatar;
+                    else if (!holder._personaAvatar && presetsModule.getAllPresets) {
+                      var _cust = presetsModule.getAllPresets().custom || {};
+                      if (_cust.avatar) holder._personaAvatar = _cust.avatar;
+                    }
+                    if (chatRenderer.renderRoleAvatar) {
+                      chatRenderer.renderRoleAvatar(roleEl, { character_name: holder._characterName, avatar: holder._personaAvatar }, holder);
+                    }
                     _setRoleModelLabel(roleEl, holder._requestedModel, holder._actualModel, {
                       suffix: holder._roleSuffix,
                       characterName: holder._characterName,
