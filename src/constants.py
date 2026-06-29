@@ -127,3 +127,5 @@ def internal_api_base() -> str:
     if override:
         return override.rstrip("/")
     return f"http://127.0.0.1:{os.environ.get('APP_PORT', '7000')}"
+
+# ci: push-event trigger probe 1782691670
